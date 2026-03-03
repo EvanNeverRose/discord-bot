@@ -18,26 +18,52 @@ const fs = require("fs");
 
 const dbFile = "./database.json";
 
-if (!process.env.BOT_TOKEN) {
-  console.error("BOT_TOKEN missing.");
-  process.exit(1);
-}
-
-const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
-});
-
-/* ================= DATABASE ================= */
+/* ================= SAFE DATABASE ================= */
 
 function loadDB() {
-  return JSON.parse(fs.readFileSync(dbFile));
+  const defaultDB = {
+    orderCounter: 1,
+    activeOrders: {},
+    completedOrders: {},
+    sellers: {},
+    netWorth: 0,
+    autoRole: null,
+    logChannel: null
+  };
+
+  if (!fs.existsSync(dbFile)) {
+    fs.writeFileSync(dbFile, JSON.stringify(defaultDB, null, 2));
+    return defaultDB;
+  }
+
+  try {
+    const data = JSON.parse(fs.readFileSync(dbFile));
+    return data;
+  } catch {
+    fs.writeFileSync(dbFile, JSON.stringify(defaultDB, null, 2));
+    return defaultDB;
+  }
 }
 
 function saveDB(data) {
   fs.writeFileSync(dbFile, JSON.stringify(data, null, 2));
 }
 
-/* ================= EMBED ================= */
+/* ================= CLIENT ================= */
+
+if (!process.env.BOT_TOKEN) {
+  console.error("BOT_TOKEN missing.");
+  process.exit(1);
+}
+
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers
+  ]
+});
+
+/* ================= EMBED BUILDER ================= */
 
 function buildOrderEmbed(id, order) {
   const subtotal = order.items.reduce((a, b) => a + b.price, 0);
@@ -71,6 +97,7 @@ client.once("ready", () => {
 client.on("guildMemberAdd", member => {
   const db = loadDB();
   if (!db.autoRole) return;
+
   const role = member.guild.roles.cache.get(db.autoRole);
   if (role) member.roles.add(role).catch(() => {});
 });
@@ -80,7 +107,7 @@ client.on("guildMemberAdd", member => {
 client.on("interactionCreate", async interaction => {
   const db = loadDB();
 
-/* ================= SLASH COMMANDS ================= */
+/* ---------- SLASH COMMANDS ---------- */
 
 if (interaction.isChatInputCommand()) {
 
@@ -107,65 +134,12 @@ if (interaction.isChatInputCommand()) {
     });
   }
 
-  if (interaction.commandName === "order_details") {
-    const id = interaction.options.getInteger("id");
-    const order = db.activeOrders[id] || db.completedOrders[id];
-    if (!order)
-      return interaction.reply({ content: "Order not found.", ephemeral: true });
-
-    return interaction.reply({ embeds: [buildOrderEmbed(id, order)] });
-  }
-
-  if (interaction.commandName === "void_order") {
-    const id = interaction.options.getInteger("id");
-    if (!db.activeOrders[id])
-      return interaction.reply({ content: "Order not found.", ephemeral: true });
-
-    delete db.activeOrders[id];
-    saveDB(db);
-    return interaction.reply(`Order #${id} voided.`);
-  }
-
-  if (interaction.commandName === "sellers") {
-    const sorted = Object.entries(db.sellers)
-      .sort((a, b) => b[1] - a[1])
-      .map(([id, amount], i) =>
-        `**${i + 1}.** <@${id}> — ${amount} R$`
-      ).join("\n") || "No sellers yet.";
-
-    return interaction.reply({ embeds: [new EmbedBuilder().setTitle("🏆 Seller Leaderboard").setDescription(sorted)] });
-  }
-
-  if (interaction.commandName === "sellers_edit") {
-    if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator))
-      return interaction.reply({ content: "Admin only.", ephemeral: true });
-
-    const user = interaction.options.getUser("user");
-    const amount = interaction.options.getInteger("amount");
-
-    db.sellers[user.id] = (db.sellers[user.id] || 0) + amount;
-    saveDB(db);
-
-    return interaction.reply("Seller updated.");
-  }
-
   if (interaction.commandName === "networth")
     return interaction.reply(`💰 Networth: ${db.netWorth} R$`);
 
-  if (interaction.commandName === "sellinglogs") {
-    db.logChannel = interaction.options.getChannel("channel").id;
-    saveDB(db);
-    return interaction.reply("Selling log channel set.");
-  }
-
-  if (interaction.commandName === "autorole") {
-    db.autoRole = interaction.options.getRole("role").id;
-    saveDB(db);
-    return interaction.reply("Auto role set.");
-  }
 }
 
-/* ================= BUTTONS ================= */
+/* ---------- BUTTONS ---------- */
 
 if (interaction.isButton()) {
 
@@ -175,59 +149,15 @@ if (interaction.isButton()) {
   if (!order)
     return interaction.reply({ content: "Order not found.", ephemeral: true });
 
-  if (action === "add") {
+  if (action === "void") {
+    delete db.activeOrders[id];
+    saveDB(db);
 
-    const select = new StringSelectMenuBuilder()
-      .setCustomId(`type_${id}`)
-      .setPlaceholder("Select item type")
-      .addOptions([
-        { label: "Livery", value: "Livery" },
-        { label: "Uniform", value: "Uniform" },
-        { label: "ELS", value: "ELS" },
-        { label: "Logo", value: "Logo" }
-      ]);
-
-    return interaction.reply({
-      content: "Choose item type:",
-      components: [new ActionRowBuilder().addComponents(select)],
-      ephemeral: true
+    return interaction.update({
+      content: "❌ Order voided.",
+      embeds: [],
+      components: []
     });
-  }
-
-  if (action === "remove") {
-    const modal = new ModalBuilder()
-      .setCustomId(`remove_modal_${id}`)
-      .setTitle("Remove Item");
-
-    modal.addComponents(
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId("itemNumber")
-          .setLabel("Item Number")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true)
-      )
-    );
-
-    return interaction.showModal(modal);
-  }
-
-  if (action === "complete") {
-    const modal = new ModalBuilder()
-      .setCustomId(`complete_modal_${id}`)
-      .setTitle("Mark Item Complete");
-
-    modal.addComponents(
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId("itemNumber")
-          .setLabel("Item Number")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true)
-      )
-    );
-
-    return interaction.showModal(modal);
   }
 
   if (action === "finish") {
@@ -241,20 +171,8 @@ if (interaction.isButton()) {
 
     db.completedOrders[id] = order;
     delete db.activeOrders[id];
-    saveDB(db);
 
-    if (db.logChannel) {
-      const channel = interaction.guild.channels.cache.get(db.logChannel);
-      if (channel)
-        channel.send({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle(`Sale Completed - Order #${id}`)
-              .setDescription(`Seller: <@${order.seller}>\nEarned: ${taxed} R$`)
-              .addFields({ name: "Items", value: order.items.map(i => `${i.type} - ${i.price} R$`).join("\n") })
-          ]
-        });
-    }
+    saveDB(db);
 
     return interaction.update({
       content: "✅ Order finished.",
@@ -262,15 +180,9 @@ if (interaction.isButton()) {
       components: []
     });
   }
-
-  if (action === "void") {
-    delete db.activeOrders[id];
-    saveDB(db);
-    return interaction.update({ content: "❌ Order voided.", embeds: [], components: [] });
-  }
 }
 
-/* ================= SELECT MENU ================= */
+/* ---------- SELECT + MODALS ---------- */
 
 if (interaction.isStringSelectMenu()) {
 
@@ -303,15 +215,18 @@ if (interaction.isStringSelectMenu()) {
   return interaction.showModal(modal);
 }
 
-/* ================= MODALS ================= */
+/* ---------- MODAL SUBMIT ---------- */
 
 if (interaction.isModalSubmit()) {
 
   const parts = interaction.customId.split("_");
 
   if (parts[0] === "add") {
+
     const id = parts[2];
     const type = parts[3];
+
+    const db = loadDB();
     const order = db.activeOrders[id];
     if (!order) return;
 
@@ -333,44 +248,10 @@ if (interaction.isModalSubmit()) {
       ephemeral: true
     });
   }
-
-  if (parts[0] === "remove") {
-    const id = parts[2];
-    const order = db.activeOrders[id];
-    const num = parseInt(interaction.fields.getTextInputValue("itemNumber"));
-
-    if (!order || !order.items[num - 1])
-      return interaction.reply({ content: "Invalid item.", ephemeral: true });
-
-    order.items.splice(num - 1, 1);
-    saveDB(db);
-
-    return interaction.reply({
-      content: "Item removed.",
-      embeds: [buildOrderEmbed(id, order)],
-      ephemeral: true
-    });
-  }
-
-  if (parts[0] === "complete") {
-    const id = parts[2];
-    const order = db.activeOrders[id];
-    const num = parseInt(interaction.fields.getTextInputValue("itemNumber"));
-
-    if (!order || !order.items[num - 1])
-      return interaction.reply({ content: "Invalid item.", ephemeral: true });
-
-    order.items[num - 1].completed = true;
-    saveDB(db);
-
-    return interaction.reply({
-      content: "Item marked complete.",
-      embeds: [buildOrderEmbed(id, order)],
-      ephemeral: true
-    });
-  }
 }
 
 });
+
+/* ================= LOGIN ================= */
 
 client.login(process.env.BOT_TOKEN);
