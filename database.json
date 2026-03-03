@@ -1,0 +1,27 @@
+{
+  "orderCounter": 6,
+  "activeOrders": {},
+  "completedOrders": {
+    "3": {
+      "seller": "889528313289252964",
+      "items": []
+    },
+    "4": {
+      "seller": "889528313289252964",
+      "items": [
+        {
+          "type": "Livery",
+          "name": "President",
+          "price": 100,
+          "completed": false
+        }
+      ]
+    }
+  },
+  "netWorth": 143,
+  "sellers": {
+    "889528313289252964": 0
+  },
+  "logChannel": "1476623774668296355",
+  "autoRole": "1458152861002236027"
+}
